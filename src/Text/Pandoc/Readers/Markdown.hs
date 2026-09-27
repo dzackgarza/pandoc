@@ -526,17 +526,20 @@ block = do
   sourcepos <- extensionEnabled Ext_sourcepos <$> getOption readerExtensions
   if sourcepos
      then do
-       let pos = T.pack (show (sourceLine start)) <> ":" <>
-                 T.pack (show (sourceColumn start)) <> "-" <>
-                 T.pack (show (sourceLine end)) <> ":" <>
-                 T.pack (show (sourceColumn end))
        -- CommonMark's sourcepos reader also uses Div wrappers for blocks
        -- without attributes. Keep the wrapper out of empty parser results.
        return $ fmap (\bs ->
          if null (B.toList bs)
             then bs
-            else B.divWith ("", [], [("data-pos", pos)]) bs) res
+            else B.divWith ("", [], [("data-pos", sourceRange start end)]) bs) res
      else return res
+
+sourceRange :: SourcePos -> SourcePos -> Text
+sourceRange start end =
+  T.pack (show (sourceLine start)) <> ":" <>
+  T.pack (show (sourceColumn start)) <> "-" <>
+  T.pack (show (sourceLine end)) <> ":" <>
+  T.pack (show (sourceColumn end))
 
 --
 -- header blocks
@@ -1609,6 +1612,19 @@ inlines = mconcat <$> many inline
 inlines1 :: PandocMonad m => MarkdownParser m (F Inlines)
 inlines1 = mconcat <$> many1 inline
 
+withInlinePos :: PandocMonad m
+              => MarkdownParser m (F Inlines)
+              -> MarkdownParser m (F Inlines)
+withInlinePos parser = do
+  start <- getPosition
+  result <- parser
+  end <- getPosition
+  sourcepos <- extensionEnabled Ext_sourcepos <$> getOption readerExtensions
+  if sourcepos
+     then return $ B.spanWith ("", [], [("data-pos", sourceRange start end)])
+                     <$> result
+     else return result
+
 inline :: PandocMonad m => MarkdownParser m (F Inlines)
 inline = do
   c <- lookAhead anyChar
@@ -1616,17 +1632,18 @@ inline = do
      ' '     -> whitespace
      '\t'    -> whitespace
      '\n'    -> endline
-     '`'     -> code
+     '`'     -> withInlinePos code
      '_'     -> strongOrEmph
      '*'     -> strongOrEmph
      '^'     -> inlineNote <|> superscript
      '['     -> note <|> cite <|> bracketedSpan <|> wikilink B.linkWith <|> link
      '!'     -> image
-     '$'     -> math
+     '$'     -> withInlinePos math
      '~'     -> strikeout <|> subscript
      '='     -> mark
      '<'     -> autoLink <|> spanHtml <|> rawHtmlInline <|> ltSign
-     '\\'    -> math <|> escapedNewline <|> escapedChar <|> rawLaTeXInline'
+     '\\'    -> withInlinePos math <|> escapedNewline <|> escapedChar <|>
+                withInlinePos rawLaTeXInline'
      '@'     -> cite <|> exampleRef
      '"'     -> smart
      '\''    -> smart
