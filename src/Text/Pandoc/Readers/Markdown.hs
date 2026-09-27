@@ -1631,7 +1631,6 @@ withInlinePos parser = do
                           inlines') <$> result
      else return result
   where
-    isPlainInline (Str _) = True
     isPlainInline Space = True
     isPlainInline _ = False
 
@@ -1669,8 +1668,8 @@ inline = do
      ':'     -> emoji
      _       -> mzero)
    <|> withInlinePos bareURL
-   <|> str
-   <|> symbol) <?> "inline"
+   <|> withInlinePos str
+   <|> withInlinePos symbol) <?> "inline"
 
 escapedChar' :: PandocMonad m => MarkdownParser m Char
 escapedChar' = try $ do
