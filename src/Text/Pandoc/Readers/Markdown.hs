@@ -1658,18 +1658,18 @@ inline = do
                 escapedChar <|>
                 withInlinePos rawLaTeXInline'
      '@'     -> withInlinePos (cite <|> exampleRef)
-     '"'     -> smart
-     '\''    -> smart
-     '\8216' -> smart
-     '\145'  -> smart
-     '\8220' -> smart
-     '\147'  -> smart
-     '-'     -> cite <|> smart
-     '.'     -> smart
+     '"'     -> withInlinePos smart
+     '\''    -> withInlinePos smart
+     '\8216' -> withInlinePos smart
+     '\145'  -> withInlinePos smart
+     '\8220' -> withInlinePos smart
+     '\147'  -> withInlinePos smart
+     '-'     -> withInlinePos (cite <|> smart)
+     '.'     -> withInlinePos smart
      '&'     -> return . B.singleton <$> charRef
      ':'     -> emoji
      _       -> mzero)
-   <|> bareURL
+   <|> withInlinePos bareURL
    <|> str
    <|> symbol) <?> "inline"
 
