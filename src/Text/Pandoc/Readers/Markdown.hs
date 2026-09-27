@@ -1633,7 +1633,6 @@ withInlinePos parser = do
   where
     isPlainInline (Str _) = True
     isPlainInline Space = True
-    isPlainInline SoftBreak = True
     isPlainInline _ = False
 
 inline :: PandocMonad m => MarkdownParser m (F Inlines)
