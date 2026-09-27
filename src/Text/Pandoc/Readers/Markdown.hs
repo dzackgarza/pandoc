@@ -1621,9 +1621,17 @@ withInlinePos parser = do
   end <- getPosition
   sourcepos <- extensionEnabled Ext_sourcepos <$> getOption readerExtensions
   if sourcepos
-     then return $ B.spanWith ("", [], [("data-pos", sourceRange start end)])
-                     <$> result
+     then return $ (\inlines' ->
+       if all isPlainInline (B.toList inlines')
+          then inlines'
+          else B.spanWith ("", [], [("data-pos", sourceRange start end)])
+                          inlines') <$> result
      else return result
+  where
+    isPlainInline (Str _) = True
+    isPlainInline Space = True
+    isPlainInline SoftBreak = True
+    isPlainInline _ = False
 
 inline :: PandocMonad m => MarkdownParser m (F Inlines)
 inline = do
@@ -1633,18 +1641,19 @@ inline = do
      '\t'    -> whitespace
      '\n'    -> endline
      '`'     -> withInlinePos code
-     '_'     -> strongOrEmph
-     '*'     -> strongOrEmph
-     '^'     -> inlineNote <|> superscript
-     '['     -> note <|> cite <|> bracketedSpan <|> wikilink B.linkWith <|> link
-     '!'     -> image
+     '_'     -> withInlinePos strongOrEmph
+     '*'     -> withInlinePos strongOrEmph
+     '^'     -> withInlinePos (inlineNote <|> superscript)
+     '['     -> withInlinePos
+                  (note <|> cite <|> bracketedSpan <|> wikilink B.linkWith <|> link)
+     '!'     -> withInlinePos image
      '$'     -> withInlinePos math
-     '~'     -> strikeout <|> subscript
-     '='     -> mark
-     '<'     -> autoLink <|> spanHtml <|> rawHtmlInline <|> ltSign
+     '~'     -> withInlinePos (strikeout <|> subscript)
+     '='     -> withInlinePos mark
+     '<'     -> withInlinePos (autoLink <|> spanHtml <|> rawHtmlInline) <|> ltSign
      '\\'    -> withInlinePos math <|> escapedNewline <|> escapedChar <|>
                 withInlinePos rawLaTeXInline'
-     '@'     -> cite <|> exampleRef
+     '@'     -> withInlinePos (cite <|> exampleRef)
      '"'     -> smart
      '\''    -> smart
      '\8216' -> smart
