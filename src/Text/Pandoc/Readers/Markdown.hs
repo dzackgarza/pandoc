@@ -1507,12 +1507,15 @@ pipeTable = try $ do
   nonindentSpaces
   lookAhead nonspaceChar
   (heads,(aligns, seplengths)) <- (,) <$> pipeTableRow <*> pipeBreak
-  let cellContents = parseFromString' pipeTableCell . trim
+  let cellContents (pos, raw) =
+        let leading = T.takeWhile isSpace raw
+            start = updatePosString pos (T.unpack leading)
+        in parseFromSources' pipeTableCell $ Sources [(start, trim raw)]
   let numcols = length aligns
   let heads' = take numcols heads
   lines' <- many pipeTableRow
   let lines'' = map (take numcols) lines'
-  let lineWidths = map (sum . map realLength) (heads' : lines'')
+  let lineWidths = map (sum . map (realLength . snd)) (heads' : lines'')
   columns <- getOption readerColumns
   -- add numcols + 1 for the pipes themselves
   let widths = if maximumBounded (sum seplengths : lineWidths) + (numcols + 1)
@@ -1533,7 +1536,7 @@ sepPipe = try $ do
   notFollowedBy blankline
 
 -- parse a row, returning raw cell contents
-pipeTableRow :: PandocMonad m => MarkdownParser m [Text]
+pipeTableRow :: PandocMonad m => MarkdownParser m [(SourcePos, Text)]
 pipeTableRow = try $ do
   scanForPipe
   skipMany spaceChar
@@ -1542,7 +1545,8 @@ pipeTableRow = try $ do
   let chunk = void (code <|> math <|> rawHtmlInline <|>
                     escapedChar <|> rawLaTeXInline')
        <|> void (noneOf "|\n\r")
-  cells <- (snd <$> withRaw (many chunk)) `sepBy1` char '|'
+  cells <- ((,) <$> getPosition <*> (snd <$> withRaw (many chunk)))
+           `sepBy1` char '|'
   closePipe <- (True <$ char '|') <|> return False
   -- at least one pipe needed for a one-column table:
   guard $ not (length cells == 1 && not (openPipe || closePipe))
