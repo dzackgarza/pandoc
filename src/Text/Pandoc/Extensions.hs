@@ -507,6 +507,7 @@ getAllExtensions f = universalExtensions <> getAll f
        , Ext_emoji
        , Ext_tex_math_single_backslash
        , Ext_tex_math_double_backslash
+       , Ext_sourcepos
        , Ext_markdown_attribute
        , Ext_mmd_title_block
        , Ext_abbreviations

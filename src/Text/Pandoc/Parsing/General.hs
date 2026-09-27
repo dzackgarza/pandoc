@@ -44,6 +44,7 @@ module Text.Pandoc.Parsing.General
   , oneOfStringsCI
   , parseFromString
   , parseFromString'
+  , parseFromSources'
   , readWith
   , readWithM
   , registerHeader
@@ -436,6 +437,26 @@ parseFromString' parser str = do
   res <- parseFromString parser str
   updateState $ setLastStrPos oldLastStrPos
   return res
+
+-- | Parse transformed input while retaining positions of its source pieces.
+parseFromSources' :: (Monad m, HasLastStrPosition u)
+                  => ParsecT Sources u m a
+                  -> Sources
+                  -> ParsecT Sources u m a
+parseFromSources' parser sources = do
+  oldPos <- getPosition
+  oldInput <- getInput
+  oldLastStrPos <- getLastStrPos <$> getState
+  updateState $ setLastStrPos Nothing
+  setInput sources
+  case unSources sources of
+    (pos, _):_ -> setPosition pos
+    []         -> return ()
+  result <- parser
+  setInput oldInput
+  setPosition oldPos
+  updateState $ setLastStrPos oldLastStrPos
+  return result
 
 -- | Parse raw line block up to and including blank lines.
 lineClump :: Monad m => ParsecT Sources st m Text

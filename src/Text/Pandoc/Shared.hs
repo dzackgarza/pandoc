@@ -416,16 +416,29 @@ compactify [] = []
 compactify items =
   let (others, final) = (init items, last items)
   in  case reverse (B.toList final) of
-           (Para a:xs)
-             | not (any isPara xs || any (any isPara . B.toList) others)
-             -> others ++ [B.fromList (reverse (Plain a : xs))]
+           (x:xs)
+             | Just plain <- paraToPlainWithSourcePos x
+             , not (any isPara xs || any (any isPara . B.toList) others)
+             -> others ++ [B.fromList (reverse (plain : xs))]
            _ | not (any (any isPara . B.toList) items)
              -> items
            _ -> map (fmap plainToPara) items
 
 plainToPara :: Block -> Block
 plainToPara (Plain ils) = Para ils
+plainToPara (Div attr [Plain ils])
+  | isSourcePosAttr attr = Div attr [Para ils]
 plainToPara x = x
+
+paraToPlainWithSourcePos :: Block -> Maybe Block
+paraToPlainWithSourcePos (Para ils) = Just $ Plain ils
+paraToPlainWithSourcePos (Div attr [Para ils])
+  | isSourcePosAttr attr = Just $ Div attr [Plain ils]
+paraToPlainWithSourcePos _ = Nothing
+
+isSourcePosAttr :: Attr -> Bool
+isSourcePosAttr ("", [], [("data-pos", _)]) = True
+isSourcePosAttr _ = False
 
 
 -- | Like @compactify@, but acts on items of definition lists.
@@ -470,6 +483,7 @@ figureDiv (ident, classes, kv) (Caption shortcapt longcapt) body =
 -- | Returns 'True' iff the given element is a 'Para'.
 isPara :: Block -> Bool
 isPara (Para _) = True
+isPara (Div attr [Para _]) = isSourcePosAttr attr
 isPara _        = False
 
 -- | Convert Pandoc inline list to plain text identifier.
@@ -705,6 +719,12 @@ handleTaskListItem handleInlines exts bls =
   where
     handleItem (Plain is : bs) = Plain (handleInlines is) : bs
     handleItem (Para is  : bs) = Para  (handleInlines is) : bs
+    handleItem (Div attr [Plain is] : bs)
+      | isSourcePosAttr attr =
+          Div attr [Plain (handleInlines is)] : bs
+    handleItem (Div attr [Para is] : bs)
+      | isSourcePosAttr attr =
+          Div attr [Para (handleInlines is)] : bs
     handleItem bs = bs
 
 -- | Set a field of a 'Meta' object.  If the field already has a value,

@@ -483,6 +483,7 @@ parseBlocks = mconcat <$> manyTill block eof
 
 block :: PandocMonad m => MarkdownParser m (F Blocks)
 block = do
+  start <- getPosition
   res <- choice [ mempty <$ blanklines
                , codeBlockFenced
                , yamlMetaBlock'
@@ -508,8 +509,21 @@ block = do
                , para
                , plain
                ] <?> "block"
-  trace (T.take 60 $ tshow $ B.toList $ runF res defaultParserState)
-  return res
+  end <- getPosition
+  sourcepos <- extensionEnabled Ext_sourcepos <$> getOption readerExtensions
+  if sourcepos
+     then do
+       let pos = T.pack (show (sourceLine start)) <> ":" <>
+                 T.pack (show (sourceColumn start)) <> "-" <>
+                 T.pack (show (sourceLine end)) <> ":" <>
+                 T.pack (show (sourceColumn end))
+       -- CommonMark's sourcepos reader also uses Div wrappers for blocks
+       -- without attributes. Keep the wrapper out of empty parser results.
+       return $ fmap (\bs ->
+         if null (B.toList bs)
+            then bs
+            else B.divWith ("", [], [("data-pos", pos)]) bs) res
+     else return res
 
 --
 -- header blocks
@@ -798,19 +812,23 @@ birdTrackLine c = try $ do
 emailBlockQuoteStart :: PandocMonad m => MarkdownParser m Char
 emailBlockQuoteStart = try $ skipNonindentSpaces >> char '>' <* optional (char ' ')
 
-emailBlockQuote :: PandocMonad m => MarkdownParser m [Text]
+emailBlockQuote :: PandocMonad m => MarkdownParser m [(SourcePos, Text)]
 emailBlockQuote = try $ do
   emailBlockQuoteStart
   let emailLine = manyChar $ nonEndline <|> try
                               (endline >> notFollowedBy emailBlockQuoteStart >>
                                return '\n')
   let emailSep = try (newline >> emailBlockQuoteStart)
+  firstPos <- getPosition
   first <- emailLine
-  rest <- many $ try $ emailSep >> emailLine
-  let raw = first:rest
+  rest <- many $ try $ do
+    emailSep
+    pos <- getPosition
+    line <- emailLine
+    return (pos, line)
   newline <|> (eof >> return '\n')
   optional blanklines
-  return raw
+  return ((firstPos, first):rest)
 
 blockQuote :: PandocMonad m => MarkdownParser m (F Blocks)
 blockQuote = do
@@ -818,7 +836,7 @@ blockQuote = do
   (mbAlert, raw') <-
     (do guardEnabled Ext_alerts
         case raw of
-          (t:ts) | "[!" `T.isPrefixOf` t ->
+          ((_,t):ts) | "[!" `T.isPrefixOf` t ->
               case T.strip t of
                 "[!TIP]" -> pure (Just "tip", ts)
                 "[!WARNING]" -> pure (Just "warning", ts)
@@ -829,7 +847,12 @@ blockQuote = do
           _ -> pure (Nothing, raw))
       <|> pure (Nothing, raw)
   -- parse the extracted block, which may contain various block elements:
-  contents <- parseFromString' parseBlocks $ T.intercalate "\n" raw' <> "\n\n"
+  let quoteSources = Sources $
+        [(pos, line <> "\n") | (pos, line) <- raw'] ++
+        case reverse raw' of
+          (pos, _):_ -> [(pos, "\n")]
+          []         -> []
+  contents <- parseFromSources' parseBlocks quoteSources
   return $
     case mbAlert of
       Nothing -> B.blockQuote <$> contents
@@ -885,7 +908,7 @@ listStart = bulletListStart
         <|> Control.Monad.void (orderedListStart Nothing)
         <|> defListStart
 
-listLine :: PandocMonad m => Int -> MarkdownParser m Text
+listLine :: PandocMonad m => Int -> MarkdownParser m (SourcePos, Text)
 listLine continuationIndent = try $ do
   notFollowedBy' (do gobbleSpaces continuationIndent
                      skipMany spaceChar
@@ -893,13 +916,15 @@ listLine continuationIndent = try $ do
   notFollowedByHtmlCloser
   notFollowedByDivCloser
   optional (() <$ gobbleSpaces continuationIndent)
-  anyLine
+  pos <- getPosition
+  line <- anyLine
+  return (pos, line)
 
 -- parse raw text for one list item, excluding start marker and continuations
 rawListItem :: PandocMonad m
             => Bool -- four space rule
             -> MarkdownParser m a
-            -> MarkdownParser m (Text, Int)
+            -> MarkdownParser m (Sources, Int)
 rawListItem fourSpaceRule start = try $ do
   pos1 <- getPosition
   start
@@ -907,34 +932,42 @@ rawListItem fourSpaceRule start = try $ do
   let continuationIndent = if fourSpaceRule
                               then 4
                               else sourceColumn pos2 - sourceColumn pos1
+  firstPos <- getPosition
   first <- anyLine
   rest <- many (do notFollowedBy listStart
                    notFollowedBy (() <$ codeBlockFenced)
                    notFollowedBy blankline
                    listLine continuationIndent)
   blanks <- manyChar blankline
-  let result = T.unlines (first:rest) <> blanks
+  let result = Sources $
+        (firstPos, first <> "\n") :
+        [(pos, line <> "\n") | (pos, line) <- rest] ++
+        [(firstPos, blanks)]
   return (result, continuationIndent)
 
 -- continuation of a list item - indented and separated by blankline
 -- or (in compact lists) endline.
 -- note: nested lists are parsed as continuations
-listContinuation :: PandocMonad m => Int -> MarkdownParser m Text
+listContinuation :: PandocMonad m => Int -> MarkdownParser m Sources
 listContinuation continuationIndent = try $ do
   x <- try $ do
          notFollowedBy blankline
          notFollowedByHtmlCloser
          notFollowedByDivCloser
          gobbleSpaces continuationIndent
-         anyLineNewline
+         pos <- getPosition
+         line <- anyLineNewline
+         return (pos, line)
   xs <- many $ try $ do
          notFollowedBy blankline
          notFollowedByHtmlCloser
          notFollowedByDivCloser
          gobbleSpaces continuationIndent <|> notFollowedBy' listStart
-         anyLineNewline
+         pos <- getPosition
+         line <- anyLineNewline
+         return (pos, line)
   blanks <- manyChar blankline
-  return $ T.concat (x:xs) <> blanks
+  return $ Sources $ (x:xs) ++ [(fst x, blanks)]
 
 -- Variant of blanklines that doesn't require blank lines
 -- before a fence or eof.
@@ -974,8 +1007,8 @@ listItem fourSpaceRule start = try $ do
   (first, continuationIndent) <- rawListItem fourSpaceRule start
   continuations <- many (listContinuation continuationIndent)
   -- parse the extracted block, which may contain various block elements:
-  let raw = T.concat (first:continuations)
-  contents <- parseFromString' parseBlocks raw
+  let raw = mconcat (first:continuations)
+  contents <- parseFromSources' parseBlocks raw
   updateState (\st -> st {stateParserContext = oldContext})
   exts <- getOption readerExtensions
   return $ B.fromList . taskListItemFromAscii exts . B.toList <$> contents
