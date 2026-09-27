@@ -12,6 +12,7 @@ Shared parsers for plaintext tables.
 module Text.Pandoc.Parsing.GridTable
   ( gridTableWith
   , gridTableWith'
+  , gridTableWithCellParser
   , tableWith
   , tableWith'
   , tableWithSpans
@@ -134,10 +135,18 @@ gridTableWith' :: (Monad m, Monad mf,
                => TableNormalization
                -> ParsecT Sources st m (mf Blocks) -- ^ Block list parser
                -> ParsecT Sources st m (mf TableComponents)
-gridTableWith' normalization blocks = do
+gridTableWith' normalization blocks =
+  gridTableWithCellParser normalization (parseFromString' blocks)
+
+gridTableWithCellParser :: (Monad m, Monad mf,
+                          HasReaderOptions st, HasLastStrPosition st)
+                       => TableNormalization
+                       -> (Text -> ParsecT Sources st m (mf Blocks))
+                       -> ParsecT Sources st m (mf TableComponents)
+gridTableWithCellParser normalization parseCell = do
   tbl <- GT.gridTable <* optional blanklines
   let blkTbl = GT.mapCells
-               (\lns -> parseFromString' blocks
+               (\lns -> parseCell
                         . flip T.snoc '\n'  -- ensure proper block parsing
                         . T.unlines
                         . removeOneLeadingSpace

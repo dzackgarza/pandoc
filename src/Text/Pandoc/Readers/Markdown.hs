@@ -1459,7 +1459,7 @@ gridTable = try $ do
   -- from every line before handing it off.
   indent <- T.length <$> lookAhead nonindentSpaces
   if indent == 0
-     then gridTableWith' NormalizeHeader parseBlocks
+     then gridTableWithCellParser NormalizeHeader parseGridCell
      else do
        let gridLine = try $ do
              count indent (char ' ')
@@ -1468,7 +1468,21 @@ gridTable = try $ do
              line <- anyLineNewline
              return (linePos, line)
        rawTable <- Sources <$> many1 gridLine
-       parseFromSources' (gridTableWith' NormalizeHeader parseBlocks) rawTable
+       parseFromSources' (gridTableWithCellParser NormalizeHeader parseGridCell)
+                         rawTable
+
+-- The grid table parser returns cell text without its source coordinates.
+-- Keep cell blocks unannotated until the parser can return that provenance.
+parseGridCell :: PandocMonad m => Text -> MarkdownParser m (F Blocks)
+parseGridCell raw = do
+  extensions <- getOption readerExtensions
+  updateState $ \st -> st{ stateOptions =
+    (stateOptions st){ readerExtensions =
+      disableExtension Ext_sourcepos extensions } }
+  parsed <- parseFromString' parseBlocks raw
+  updateState $ \st -> st{ stateOptions =
+    (stateOptions st){ readerExtensions = extensions } }
+  return parsed
 
 pipeBreak :: PandocMonad m => MarkdownParser m ([Alignment], [Int])
 pipeBreak = try $ do
