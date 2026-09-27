@@ -954,11 +954,12 @@ rawListItem fourSpaceRule start = try $ do
                    notFollowedBy (() <$ codeBlockFenced)
                    notFollowedBy blankline
                    listLine continuationIndent)
+  blankPos <- getPosition
   blanks <- manyChar blankline
   let result = Sources $
         (firstPos, first <> "\n") :
         [(pos, line <> "\n") | (pos, line) <- rest] ++
-        [(firstPos, blanks)]
+        [(blankPos, blanks) | not (T.null blanks)]
   return (result, continuationIndent)
 
 -- continuation of a list item - indented and separated by blankline
@@ -982,8 +983,10 @@ listContinuation continuationIndent = try $ do
          pos <- getPosition
          line <- anyLineNewline
          return (pos, line)
+  blankPos <- getPosition
   blanks <- manyChar blankline
-  return $ Sources $ (x:xs) ++ [(fst x, blanks)]
+  return $ Sources $ (x:xs) ++
+    [(blankPos, blanks) | not (T.null blanks)]
 
 -- Variant of blanklines that doesn't require blank lines
 -- before a fence or eof.
@@ -1637,9 +1640,9 @@ inline :: PandocMonad m => MarkdownParser m (F Inlines)
 inline = do
   c <- lookAhead anyChar
   ((case c of
-     ' '     -> whitespace
-     '\t'    -> whitespace
-     '\n'    -> endline
+     ' '     -> withInlinePos whitespace
+     '\t'    -> withInlinePos whitespace
+     '\n'    -> withInlinePos endline
      '`'     -> withInlinePos code
      '_'     -> withInlinePos strongOrEmph
      '*'     -> withInlinePos strongOrEmph
@@ -1651,7 +1654,8 @@ inline = do
      '~'     -> withInlinePos (strikeout <|> subscript)
      '='     -> withInlinePos mark
      '<'     -> withInlinePos (autoLink <|> spanHtml <|> rawHtmlInline) <|> ltSign
-     '\\'    -> withInlinePos math <|> escapedNewline <|> escapedChar <|>
+     '\\'    -> withInlinePos math <|> withInlinePos escapedNewline <|>
+                escapedChar <|>
                 withInlinePos rawLaTeXInline'
      '@'     -> withInlinePos (cite <|> exampleRef)
      '"'     -> smart
