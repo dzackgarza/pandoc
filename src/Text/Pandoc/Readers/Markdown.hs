@@ -435,19 +435,23 @@ noteMarker = string "[^" >>
   many1TillChar (satisfy (`notElem` ['\r','\n','\t',' ','^','[',']']))
                 (char ']')
 
-rawLine :: PandocMonad m => MarkdownParser m Text
+rawLine :: PandocMonad m => MarkdownParser m (SourcePos, Text)
 rawLine = try $ do
   notFollowedBy blankline
   notFollowedByDivCloser
   notFollowedBy' $ try $ skipNonindentSpaces >> noteMarker
   optional indentSpaces
-  anyLine
+  pos <- getPosition
+  line <- anyLine
+  return (pos, line)
 
-rawLines :: PandocMonad m => MarkdownParser m Text
+rawLines :: PandocMonad m => MarkdownParser m Sources
 rawLines = do
+  firstPos <- getPosition
   first <- anyLine
   rest <- many rawLine
-  return $ T.unlines (first:rest)
+  return $ Sources $ (firstPos, first <> "\n") :
+    [(pos, line <> "\n") | (pos, line) <- rest]
 
 noteBlock :: PandocMonad m => MarkdownParser m (F Blocks)
 noteBlock = do
@@ -461,10 +465,19 @@ noteBlock = do
      optional indentSpaces
      updateState $ \st -> st{ stateInNote = True }
      first <- rawLines
-     rest <- many $ try $ blanklines >> indentSpaces >> rawLines
-     let raw = T.unlines (first:rest) <> "\n"
+     rest <- many $ try $ do
+       blankPos <- getPosition
+       blanklines
+       indentSpaces
+       chunk <- rawLines
+       return (blankPos, chunk)
      optional blanklines
-     parsed <- parseFromString' parseBlocks raw
+     endPos <- getPosition
+     let raw = first <>
+               mconcat [Sources [(blankPos, "\n")] <> chunk |
+                        (blankPos, chunk) <- rest] <>
+               Sources [(endPos, "\n\n")]
+     parsed <- parseFromSources' parseBlocks raw
      oldnotes <- stateNotes' <$> getState
      case M.lookup ref oldnotes of
        Just _  -> logMessage $ DuplicateNoteReference ref pos
@@ -1448,11 +1461,14 @@ gridTable = try $ do
   if indent == 0
      then gridTableWith' NormalizeHeader parseBlocks
      else do
-       let gridLine = try $ count indent (char ' ')
-                              *> lookAhead (oneOf "+|")
-                              *> anyLineNewline
-       rawTable <- T.concat <$> many1 gridLine
-       parseFromString' (gridTableWith' NormalizeHeader parseBlocks) rawTable
+       let gridLine = try $ do
+             count indent (char ' ')
+             lookAhead (oneOf "+|")
+             linePos <- getPosition
+             line <- anyLineNewline
+             return (linePos, line)
+       rawTable <- Sources <$> many1 gridLine
+       parseFromSources' (gridTableWith' NormalizeHeader parseBlocks) rawTable
 
 pipeBreak :: PandocMonad m => MarkdownParser m ([Alignment], [Int])
 pipeBreak = try $ do
