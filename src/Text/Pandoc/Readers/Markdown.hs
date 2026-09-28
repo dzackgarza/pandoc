@@ -47,7 +47,9 @@ import Safe.Foldable (maximumBounded)
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
 import Text.Pandoc.Walk (walk)
-import Text.Pandoc.Parsing hiding (tableCaption)
+import Text.Pandoc.Parsing hiding (tableCaption, parseFromString,
+                                   parseFromString')
+import qualified Text.Pandoc.Parsing as P
 import Text.Pandoc.Readers.HTML (htmlInBalanced, htmlTag, isBlockTag,
                                  isInlineTag, isTextTag)
 import Text.Pandoc.Readers.HTML.TagCategories (voidTags)
@@ -219,9 +221,19 @@ litBetweenNoSpace op cl = try $ do
 inBalancedBrackets :: PandocMonad m
                    => MarkdownParser m (F a)
                    -> MarkdownParser m (F a)
-inBalancedBrackets innerParser =
-  try $ char '[' >> withRaw (go 1) >>=
-          parseFromString innerParser . stripBracket . snd
+inBalancedBrackets innerParser = try $ do
+  char '['
+  pos <- getPosition
+  input <- getInput
+  (_, raw) <- withRaw (go 1)
+  -- Reparse the bracketed text from the input itself, so its nodes keep their
+  -- source positions. The first chunk's stored position is where the chunk
+  -- began, so it is replaced by the current one.
+  let bracketed = case unSources input of
+        (_, t) : rest -> Sources ((pos, t) : rest)
+        []            -> input
+  parseFromPositionedSources innerParser $
+    takeSources (T.length (stripBracket raw)) bracketed
   where stripBracket t = case T.unsnoc t of
           Just (t', ']') -> t'
           _              -> t
@@ -241,6 +253,56 @@ inBalancedBrackets innerParser =
           (char '[' >> go (openBrackets + 1))
           <|>
           (satisfy (/= '\n') >> go openBrackets)
+
+-- | The first @n@ characters of @sources@, with their source positions.
+takeSources :: Int -> Sources -> Sources
+takeSources n (Sources chunks) = Sources (go n chunks)
+  where
+    go _ [] = []
+    go k ((pos, t) : rest)
+      | k <= 0 = []
+      | T.length t >= k = [(pos, T.take k t)]
+      | otherwise = (pos, t) : go (k - T.length t) rest
+
+-- | Like 'P.parseFromString', but the text keeps its source positions.
+parseFromPositionedSources :: PandocMonad m
+                           => MarkdownParser m a
+                           -> Sources
+                           -> MarkdownParser m a
+parseFromPositionedSources parser sources = do
+  oldPos <- getPosition
+  oldInput <- getInput
+  setInput sources
+  case unSources sources of
+    (pos, _):_ -> setPosition pos
+    []         -> return ()
+  result <- parser
+  setInput oldInput
+  setPosition oldPos
+  return result
+
+-- | Parse without the sourcepos extension, so no source position is reported.
+withoutSourcePos :: PandocMonad m => MarkdownParser m a -> MarkdownParser m a
+withoutSourcePos parser = do
+  extensions <- getOption readerExtensions
+  let setExtensions exts = updateState $ \st -> st{ stateOptions =
+        (stateOptions st){ readerExtensions = exts } }
+  setExtensions (disableExtension Ext_sourcepos extensions)
+  result <- parser
+  setExtensions extensions
+  return result
+
+-- A text re-parse starts at line 1, column 1 of a chunk, not at the text's place
+-- in the document, so the nodes it returns carry no source positions. A
+-- re-parse that keeps positions goes through 'parseFromPositionedSources' or
+-- 'parseFromSources''.
+parseFromString :: PandocMonad m
+                => MarkdownParser m a -> Text -> MarkdownParser m a
+parseFromString parser = withoutSourcePos . P.parseFromString parser
+
+parseFromString' :: PandocMonad m
+                 => MarkdownParser m a -> Text -> MarkdownParser m a
+parseFromString' parser = withoutSourcePos . P.parseFromString' parser
 
 --
 -- document structure
@@ -1513,18 +1575,10 @@ gridTable = try $ do
        parseFromSources' (gridTableWithCellParser NormalizeHeader parseGridCell)
                          rawTable
 
--- The grid table parser returns cell text without its source coordinates.
--- Keep cell blocks unannotated until the parser can return that provenance.
+-- The grid table parser returns cell text without its source coordinates, so
+-- cell blocks carry no source positions ('parseFromString'').
 parseGridCell :: PandocMonad m => Text -> MarkdownParser m (F Blocks)
-parseGridCell raw = do
-  extensions <- getOption readerExtensions
-  updateState $ \st -> st{ stateOptions =
-    (stateOptions st){ readerExtensions =
-      disableExtension Ext_sourcepos extensions } }
-  parsed <- parseFromString' parseBlocks raw
-  updateState $ \st -> st{ stateOptions =
-    (stateOptions st){ readerExtensions = extensions } }
-  return parsed
+parseGridCell = parseFromString' parseBlocks
 
 pipeBreak :: PandocMonad m => MarkdownParser m ([Alignment], [Int])
 pipeBreak = try $ do
