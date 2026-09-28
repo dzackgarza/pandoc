@@ -223,15 +223,10 @@ inBalancedBrackets :: PandocMonad m
                    -> MarkdownParser m (F a)
 inBalancedBrackets innerParser = try $ do
   char '['
-  pos <- getPosition
-  input <- getInput
+  bracketed <- positionedInput
   (_, raw) <- withRaw (go 1)
   -- Reparse the bracketed text from the input itself, so its nodes keep their
-  -- source positions. The first chunk's stored position is where the chunk
-  -- began, so it is replaced by the current one.
-  let bracketed = case unSources input of
-        (_, t) : rest -> Sources ((pos, t) : rest)
-        []            -> input
+  -- source positions.
   parseFromPositionedSources innerParser $
     takeSources (T.length (stripBracket raw)) bracketed
   where stripBracket t = case T.unsnoc t of
@@ -263,6 +258,27 @@ takeSources n (Sources chunks) = Sources (go n chunks)
       | k <= 0 = []
       | T.length t >= k = [(pos, T.take k t)]
       | otherwise = (pos, t) : go (k - T.length t) rest
+
+-- | The rest of the input, with the first chunk at the current position.
+positionedInput :: PandocMonad m => MarkdownParser m Sources
+positionedInput = do
+  pos <- getPosition
+  input <- getInput
+  return $ case unSources input of
+    (_, t) : rest -> Sources ((pos, t) : rest)
+    []            -> input
+
+-- | 'dropBrackets' for positioned source: the text between @[@ and @]@.
+dropBracketSources :: Sources -> Sources
+dropBracketSources sources =
+  let opened = case unSources sources of
+        (pos, t) : rest | Just ('[', t') <- T.uncons t ->
+          Sources ((updatePosString pos "[", t') : rest)
+        _ -> sources
+      text = sourcesToText opened
+  in if T.isSuffixOf "]" text
+        then takeSources (T.length text - 1) opened
+        else opened
 
 -- | Like 'P.parseFromString', but the text keeps its source positions.
 parseFromPositionedSources :: PandocMonad m
@@ -2094,9 +2110,12 @@ link = try $ do
   st <- getState
   guard $ stateAllowLinks st
   setState $ st{ stateAllowLinks = False }
+  labelSources <- positionedInput
   (lab,raw) <- reference
   setState $ st{ stateAllowLinks = True }
-  regLink B.linkWith lab <|> referenceLink B.linkWith (lab,raw)
+  regLink B.linkWith lab <|>
+    referenceLinkFrom (Just (takeSources (T.length raw) labelSources))
+                      B.linkWith (lab,raw)
 
 bracketedSpan :: PandocMonad m => MarkdownParser m (F Inlines)
 bracketedSpan = do
@@ -2150,7 +2169,17 @@ referenceLink :: PandocMonad m
               => (Attr -> Text -> Text -> Inlines -> Inlines)
               -> (F Inlines, Text)
               -> MarkdownParser m (F Inlines)
-referenceLink constructor (lab, raw) = do
+referenceLink = referenceLinkFrom Nothing
+
+-- | 'referenceLink', given the bracketed label's positioned source when the
+-- caller has it, so the text shown for an unresolved reference keeps its
+-- source positions.
+referenceLinkFrom :: PandocMonad m
+                  => Maybe Sources
+                  -> (Attr -> Text -> Text -> Inlines -> Inlines)
+                  -> (F Inlines, Text)
+                  -> MarkdownParser m (F Inlines)
+referenceLinkFrom labelSources constructor (lab, raw) = do
   sp <- (True <$ lookAhead (char ' ')) <|> return False
   (_,!raw') <- option (mempty, "") $
       lookAhead (try (do guardEnabled Ext_citations
@@ -2168,9 +2197,12 @@ referenceLink constructor (lab, raw) = do
           _ -> (False, raw)
   let !key = toKey $ if labIsRef then rawsuffix else raw'
   parsedRaw <- parseFromString' inlines raw'
-  fallback  <- parseFromString' inlines $ if exclam
-                                             then rawsuffix
-                                             else dropBrackets rawsuffix
+  fallback  <- case labelSources of
+    Just sources | not exclam ->
+      parseFromPositionedSources inlines (dropBracketSources sources)
+    _ -> parseFromString' inlines $ if exclam
+                                       then rawsuffix
+                                       else dropBrackets rawsuffix
   implicitHeaderRefs <- option False $
                          True <$ guardEnabled Ext_implicit_header_references
   let makeFallback = do
