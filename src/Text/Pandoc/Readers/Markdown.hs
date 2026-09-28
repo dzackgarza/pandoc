@@ -543,22 +543,36 @@ sourceRange start end =
   T.pack (show (sourceColumn end))
 
 -- Like htmlBlock for standalone HTML tags, this block parser keeps unindented
--- Jinja/Markdoc tag, comment, and variable lines and HTML comment lines outside
--- adjacent lists and tables. An indented tag line stays a continuation of the
--- enclosing block. The authored line is retained. htmlBlock precedes this
--- parser, so an HTML comment line it accepts stays an html RawBlock.
+-- Jinja/Markdoc tags, comments, and variables and HTML comments that stand alone
+-- on their lines outside adjacent lists and tables. A tag may span lines: its
+-- opening line holds no closing delimiter, and it ends at the first line that
+-- ends with one, with no blank line or other closing delimiter before that. An
+-- indented tag line stays a continuation of the enclosing block. The authored
+-- lines are retained. htmlBlock precedes this parser, so an HTML comment it
+-- accepts stays an html RawBlock.
 flowmarkTagBlock :: PandocMonad m => MarkdownParser m (F Blocks)
 flowmarkTagBlock = try $ do
   guardEnabled Ext_flowmark_tags
-  line <- lookAhead anyLine
-  let stripped = T.stripEnd line
-      delimited open close =
-        T.isPrefixOf open stripped && T.isSuffixOf close stripped
-  guard $ not (T.null line) && not (isSpace (T.head line))
-  guard $ delimited "{%" "%}" || delimited "{#" "#}" || delimited "{{" "}}" ||
-          delimited "<!--" "-->"
+  first <- lookAhead anyLine
+  guard $ not (T.null first) && not (isSpace (T.head first))
+  let delimiters = [("{%", "%}"), ("{#", "#}"), ("{{", "}}"), ("<!--", "-->")]
+  (open, close) <- maybe mzero return $
+    L.find (\(o, _) -> T.isPrefixOf o first) delimiters
+  let body = T.drop (T.length open) first
+      closesHere = T.isSuffixOf close (T.stripEnd body)
+  guard $ closesHere || not (close `T.isInfixOf` body)
   _ <- anyLine
-  return $ return $ B.rawBlock "flowmark-tag" line
+  rest <- if closesHere
+    then return []
+    else do
+      middle <- many $ try $ do
+        l <- anyLine
+        guard $ not (T.all isSpace l) && not (close `T.isInfixOf` l)
+        return l
+      lastLine <- anyLine
+      guard $ T.isSuffixOf close (T.stripEnd lastLine)
+      return (middle ++ [lastLine])
+  return $ return $ B.rawBlock "flowmark-tag" (T.intercalate "\n" (first : rest))
 
 --
 -- header blocks
