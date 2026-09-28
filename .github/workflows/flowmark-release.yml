@@ -66,6 +66,11 @@ jobs:
         strings pandoc-flowmark | grep -q '\$title\$'
         printf '{%% field %%}\n- one\n{%% /field %%}\n' \
           | ./pandoc-flowmark -f markdown+flowmark_tags+sourcepos -t json
+        native=$(printf -- '- a\n<!--toc:end-->\n' \
+          | ./pandoc-flowmark -f markdown+flowmark_tags -t native)
+        echo "$native"
+        echo "$native" | tr -d ' \n' \
+          | grep -q '^\[BulletList.*\],RawBlock(Format"html")"<!--toc:end-->"\]$'
 
     - name: Package
       run: |
