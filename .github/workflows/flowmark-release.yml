@@ -1,0 +1,85 @@
+# Build a fully static Linux x86_64 pandoc-flowmark executable and publish it
+# as a GitHub release asset.
+#
+# Reference: upstream's static Linux release build, the `debpkg` target in
+# Makefile (docker image $(DOCKERIMAGE) = quay.io/benz0li/ghc-musl:9.10 and its
+# CABALOPTS) running linux/make_artifacts.sh (cabal build, strip, and the
+# static-link / +server +lua / embedded data file checks).
+
+name: Flowmark release
+
+on:
+  push:
+    tags:
+      - 'flowmark-*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+    - name: Require a flowmark-* tag ref
+      run: |
+        case "$GITHUB_REF" in
+          refs/tags/flowmark-*) ;;
+          *) echo "Run this workflow on a flowmark-* tag, not $GITHUB_REF" >&2; exit 1;;
+        esac
+
+    - uses: actions/checkout@v7
+
+    - name: Cache cabal store
+      uses: actions/cache@v6
+      with:
+        path: .cabal-docker
+        key: flowmark-static-cabal-${{ hashFiles('cabal.project', '**/*.cabal') }}
+        restore-keys: flowmark-static-cabal-
+
+    - name: Build static executable in Alpine
+      run: |
+        mkdir -p .cabal-docker
+        docker run -v "$PWD":/mnt \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e CABAL_DIR=/mnt/.cabal-docker \
+          -w /mnt \
+          --rm \
+          quay.io/benz0li/ghc-musl:9.10 \
+          sh -euc '
+            OPTS="-f-export-dynamic -fembed_data_files -fserver -flua --enable-executable-static -j4 --ghc-option=-j4 --ghc-option=-split-sections --ghc-option=-optc-Os --ghc-option=-optl=-pthread"
+            cabal update
+            cabal build $OPTS pandoc-cli
+            cp "$(cabal list-bin $OPTS pandoc-cli)" pandoc-flowmark
+            strip pandoc-flowmark
+          '
+
+    - name: Verify executable
+      run: |
+        file pandoc-flowmark | grep "statically linked"
+        ./pandoc-flowmark --version
+        ./pandoc-flowmark --version | grep -q '+server +lua'
+        strings pandoc-flowmark | grep -q '\$title\$'
+        printf '{%% field %%}\n- one\n{%% /field %%}\n' \
+          | ./pandoc-flowmark -f markdown+flowmark_tags+sourcepos -t json
+
+    - name: Package
+      run: |
+        mkdir "$TAG-linux-amd64"
+        cp pandoc-flowmark COPYRIGHT "$TAG-linux-amd64/"
+        tar czf "$TAG-linux-amd64.tar.gz" "$TAG-linux-amd64"
+        sha256sum pandoc-flowmark "$TAG-linux-amd64.tar.gz" > SHA256SUMS
+
+    - name: Publish release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release view "$TAG" > /dev/null 2>&1 \
+          || gh release create "$TAG" --verify-tag --title "$TAG" \
+               --notes "Static Linux x86_64 pandoc-flowmark built from $GITHUB_SHA."
+        gh release upload "$TAG" --clobber \
+          pandoc-flowmark "$TAG-linux-amd64.tar.gz" SHA256SUMS
