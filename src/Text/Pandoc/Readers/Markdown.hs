@@ -543,9 +543,10 @@ sourceRange start end =
   T.pack (show (sourceColumn end))
 
 -- Like htmlBlock for standalone HTML tags, this block parser keeps unindented
--- Jinja/Markdoc tag, comment, and variable lines outside adjacent lists and
--- tables. An indented tag line stays a continuation of the enclosing block.
--- The authored line is retained.
+-- Jinja/Markdoc tag, comment, and variable lines and HTML comment lines outside
+-- adjacent lists and tables. An indented tag line stays a continuation of the
+-- enclosing block. The authored line is retained. htmlBlock precedes this
+-- parser, so an HTML comment line it accepts stays an html RawBlock.
 flowmarkTagBlock :: PandocMonad m => MarkdownParser m (F Blocks)
 flowmarkTagBlock = try $ do
   guardEnabled Ext_flowmark_tags
@@ -554,7 +555,8 @@ flowmarkTagBlock = try $ do
       delimited open close =
         T.isPrefixOf open stripped && T.isSuffixOf close stripped
   guard $ not (T.null line) && not (isSpace (T.head line))
-  guard $ delimited "{%" "%}" || delimited "{#" "#}" || delimited "{{" "}}"
+  guard $ delimited "{%" "%}" || delimited "{#" "#}" || delimited "{{" "}}" ||
+          delimited "<!--" "-->"
   _ <- anyLine
   return $ return $ B.rawBlock "flowmark-tag" line
 
