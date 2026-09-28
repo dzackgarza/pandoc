@@ -259,14 +259,17 @@ takeSources n (Sources chunks) = Sources (go n chunks)
       | T.length t >= k = [(pos, T.take k t)]
       | otherwise = (pos, t) : go (k - T.length t) rest
 
--- | The rest of the input, with the first chunk at the current position.
+-- | The rest of the input, with the first chunk at the current position. A
+-- chunk's stored position is where the chunk began, so a partly read chunk
+-- takes the current position; a fully read one is dropped, and the next chunk,
+-- not yet read, keeps its own.
 positionedInput :: PandocMonad m => MarkdownParser m Sources
 positionedInput = do
   pos <- getPosition
   input <- getInput
   return $ case unSources input of
-    (_, t) : rest -> Sources ((pos, t) : rest)
-    []            -> input
+    (_, t) : rest | not (T.null t) -> Sources ((pos, t) : rest)
+    chunks -> Sources (dropWhile (T.null . snd) chunks)
 
 -- | 'dropBrackets' for positioned source: the text between @[@ and @]@.
 dropBracketSources :: Sources -> Sources
