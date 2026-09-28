@@ -508,6 +508,7 @@ block = do
                , header
                , lhsCodeBlock
                , htmlBlock
+               , flowmarkTagBlock
                , table
                , codeBlockIndented
                , rawTeXBlock
@@ -540,6 +541,22 @@ sourceRange start end =
   T.pack (show (sourceColumn start)) <> "-" <>
   T.pack (show (sourceLine end)) <> ":" <>
   T.pack (show (sourceColumn end))
+
+-- Like htmlBlock for standalone HTML tags, this block parser keeps unindented
+-- Jinja/Markdoc tag, comment, and variable lines outside adjacent lists and
+-- tables. An indented tag line stays a continuation of the enclosing block.
+-- The authored line is retained.
+flowmarkTagBlock :: PandocMonad m => MarkdownParser m (F Blocks)
+flowmarkTagBlock = try $ do
+  guardEnabled Ext_flowmark_tags
+  line <- lookAhead anyLine
+  let stripped = T.stripEnd line
+      delimited open close =
+        T.isPrefixOf open stripped && T.isSuffixOf close stripped
+  guard $ not (T.null line) && not (isSpace (T.head line))
+  guard $ delimited "{%" "%}" || delimited "{#" "#}" || delimited "{{" "}}"
+  _ <- anyLine
+  return $ return $ B.rawBlock "flowmark-tag" line
 
 --
 -- header blocks
@@ -926,6 +943,7 @@ listStart = bulletListStart
 
 listLine :: PandocMonad m => Int -> MarkdownParser m (SourcePos, Text)
 listLine continuationIndent = try $ do
+  notFollowedBy' (Control.Monad.void flowmarkTagBlock)
   notFollowedBy' (do gobbleSpaces continuationIndent
                      skipMany spaceChar
                      listStart)
@@ -969,6 +987,7 @@ listContinuation :: PandocMonad m => Int -> MarkdownParser m Sources
 listContinuation continuationIndent = try $ do
   x <- try $ do
          notFollowedBy blankline
+         notFollowedBy' (Control.Monad.void flowmarkTagBlock)
          notFollowedByHtmlCloser
          notFollowedByDivCloser
          gobbleSpaces continuationIndent
@@ -977,6 +996,7 @@ listContinuation continuationIndent = try $ do
          return (pos, line)
   xs <- many $ try $ do
          notFollowedBy blankline
+         notFollowedBy' (Control.Monad.void flowmarkTagBlock)
          notFollowedByHtmlCloser
          notFollowedByDivCloser
          gobbleSpaces continuationIndent <|> notFollowedBy' listStart

@@ -76,6 +76,7 @@ data Extension =
     | Ext_fenced_code_blocks  -- ^ Parse fenced code blocks
     | Ext_fenced_divs             -- ^ Allow fenced div syntax :::
     | Ext_footnotes           -- ^ Pandoc\/PHP\/MMD style footnotes
+    | Ext_flowmark_tags       -- ^ Treat standalone template tags as blocks
     | Ext_four_space_rule     -- ^ Require 4-space indent for list contents
     | Ext_gfm_auto_identifiers  -- ^ Use GitHub's method for generating
                               -- header identifiers; presupposes
@@ -508,6 +509,7 @@ getAllExtensions f = universalExtensions <> getAll f
        , Ext_tex_math_single_backslash
        , Ext_tex_math_double_backslash
        , Ext_sourcepos
+       , Ext_flowmark_tags
        , Ext_markdown_attribute
        , Ext_mmd_title_block
        , Ext_abbreviations
