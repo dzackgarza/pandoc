@@ -1199,6 +1199,8 @@ definitionListItem = try $ do
 
 paraToPlain :: Block -> Block
 paraToPlain (Para ils) = Plain ils
+paraToPlain (Div attr [Para ils])
+  | isSourcePosAttr attr = Div attr [Plain ils]
 paraToPlain x = x
 
 definitionList :: PandocMonad m => MarkdownParser m (F Blocks)
@@ -1224,6 +1226,12 @@ para = try $ do
         case B.toList inlns of
           [Image attr figCaption (src, tit)]
             | extensionEnabled Ext_implicit_figures exts
+            , not (null figCaption) -> do
+                implicitFigure attr (B.fromList figCaption) src tit
+          -- The image alone in its paragraph, in its source-position wrapper.
+          [Span spanAttr [Image attr figCaption (src, tit)]]
+            | isSourcePosAttr spanAttr
+            , extensionEnabled Ext_implicit_figures exts
             , not (null figCaption) -> do
                 implicitFigure attr (B.fromList figCaption) src tit
 

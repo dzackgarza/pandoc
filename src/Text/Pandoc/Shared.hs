@@ -61,6 +61,7 @@ module Text.Pandoc.Shared (
                      onlySimpleTableCells,
                      isTightList,
                      taskListItemFromAscii,
+                     isSourcePosAttr,
                      taskListItemToAscii,
                      handleTaskListItem,
                      addMetaField,
