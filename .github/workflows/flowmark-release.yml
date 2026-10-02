@@ -71,6 +71,11 @@ jobs:
         echo "$native"
         echo "$native" | tr -d ' \n' \
           | grep -q '^\[BulletList.*\],RawBlock(Format"html")"<!--toc:end-->"\]$'
+        cells=$(printf '| a | b |\n|---|---|\n| c | d | e |\n' \
+          | ./pandoc-flowmark -f markdown+sourcepos -t native)
+        echo "$cells" | grep -q '"3:2-3:5"'
+        echo "$cells" | grep -q '"3:6-3:9"'
+        if echo "$cells" | grep -q '"3:10-'; then exit 1; fi
 
     - name: Package
       run: |

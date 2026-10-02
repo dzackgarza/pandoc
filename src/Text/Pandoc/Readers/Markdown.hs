@@ -1644,8 +1644,29 @@ pipeTable = try $ do
   (headCells :: F [Blocks]) <- sequence <$> mapM cellContents heads'
   (rows :: F [[Blocks]]) <- sequence <$>
                             mapM (fmap sequence . mapM cellContents) lines''
-  return $
-    toTableComponents' NormalizeHeader aligns widths <$> fmap (:[]) headCells <*> rows
+  sourcepos <- extensionEnabled Ext_sourcepos <$> getOption readerExtensions
+  let located = if sourcepos then locatePipeCells heads' lines'' else id
+  return $ located <$>
+    (toTableComponents' NormalizeHeader aligns widths <$> fmap (:[]) headCells <*> rows)
+
+-- | Give each pipe table cell the source range of its raw text between the
+-- pipes, as a @data-pos@ attribute. Cells past the column count have no node,
+-- so the authored text outside every cell range is the text the table drops.
+locatePipeCells :: [(SourcePos, Text)] -> [[(SourcePos, Text)]]
+                -> TableComponents -> TableComponents
+locatePipeCells heads rows (TableComponents attr capt specs th bodies foot) =
+  TableComponents attr capt specs (locateHead th) (locateBodies bodies) foot
+ where
+  locateHead (TableHead ha hrows) = TableHead ha (zipWith locateRow [heads] hrows)
+  locateBodies [TableBody ba n ih brows] =
+    [TableBody ba n ih (zipWith locateRow rows brows)]
+  locateBodies bs = bs
+  locateRow raws (Row ra cells) =
+    Row ra (zipWith locateCell raws cells ++ drop (length raws) cells)
+  locateCell (pos, raw) (Cell (ident, classes, kvs) align rspan cspan bs) =
+    let end = updatePosString pos (T.unpack raw)
+    in Cell (ident, classes, kvs ++ [("data-pos", sourceRange pos end)])
+            align rspan cspan bs
 
 sepPipe :: PandocMonad m => MarkdownParser m ()
 sepPipe = try $ do
