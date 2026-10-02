@@ -2107,11 +2107,14 @@ wikilink constructor = do
   try $ do
     string "[[" *> notFollowedBy' (char '[')
     raw <- many1TillChar anyChar (try $ string "]]")
+    -- A backslash before the pipe escapes it from a pipe table cell, as in
+    -- Obsidian, so it belongs to neither the target nor the title.
+    let unescape before = fromMaybe before (T.stripSuffix "\\" before)
     let (title, url) = case T.break (== '|') raw of
           (before, "") -> (before, before)
           (before, after)
-            | titleAfter -> (T.drop 1 after, before)
-            | otherwise -> (before, T.drop 1 after)
+            | titleAfter -> (T.drop 1 after, unescape before)
+            | otherwise -> (unescape before, T.drop 1 after)
     guard $ T.all (\c -> c /= '\n' && c /= '\r' && c /= '\f' && c /= '\t') url
     return . pure . constructor attr url "" $
        B.text $ fromEntities title
